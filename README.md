@@ -115,4 +115,4 @@ node tools/validate_export_package/dist/cli.js path/to/package.zip
 
 ## 许可
 
-MIT
+Apache-2.0
