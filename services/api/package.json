@@ -1,0 +1,26 @@
+{
+  "name": "@resource-gallery/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+    "dev": "node --env-file=../../.env --watch --import tsx src/index.ts",
+    "start": "node --env-file=../../.env dist/index.js",
+    "seed": "node --env-file=../../.env --import tsx src/seed-cli.ts",
+    "sync:seed-credentials": "node --env-file=../../.env --import tsx src/sync-seed-credentials.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && node --import tsx --test src/smoke.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@resource-gallery/export-schema": "workspace:*",
+    "hono": "^4.6.14",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

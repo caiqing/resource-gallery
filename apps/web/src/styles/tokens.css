@@ -1,0 +1,91 @@
+/* Resource Gallery — Design Tokens v0.1.0 */
+:root {
+  color-scheme: light;
+
+  --bg: #f4f6f4;
+  --bg-elevated: #f8faf8;
+  --surface: #ffffff;
+  --surface-2: #e9eeeb;
+  --ink: #171c19;
+  --ink-soft: #3f4943;
+  --muted: #69736d;
+  --line: #dce3df;
+  --accent: #2f5d50;
+  --accent-contrast: #f8faf7;
+  --accent-soft: #e4eeea;
+  --credit: #57534e;
+  --like: #9a3412;
+  --success: #3f6212;
+  --warn: #a16207;
+  --danger: #9f1239;
+  --shadow: 0 1px 2px rgb(23 28 25 / 4%), 0 12px 32px rgb(23 28 25 / 6%);
+  --overlay: rgb(23 28 25 / 42%);
+
+  --font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --font-body: Inter, "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+
+  --nav-h: 64px;
+  --content-max: 1280px;
+  --buy-col: 320px;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 180ms;
+
+  --admin-bg: #f4f4f5;
+  --admin-surface: #ffffff;
+  --admin-ink: #18181b;
+  --admin-muted: #71717a;
+  --admin-line: #e4e4e7;
+  --admin-accent: #334155;
+  --admin-accent-contrast: #f8fafc;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #12110f;
+  --bg-elevated: #181614;
+  --surface: #1c1917;
+  --surface-2: #292524;
+  --ink: #f5f0e8;
+  --ink-soft: #d6d3d1;
+  --muted: #a8a29e;
+  --line: #292524;
+  --accent: #8fb5a6;
+  --accent-contrast: #102018;
+  --accent-soft: #1f2e29;
+  --credit: #d6d3d1;
+  --like: #e7b4a0;
+  --success: #a3e635;
+  --warn: #fbbf24;
+  --danger: #fb7185;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 16px 40px rgb(0 0 0 / 35%);
+  --overlay: rgb(0 0 0 / 58%);
+
+  --admin-bg: #18181b;
+  --admin-surface: #27272a;
+  --admin-ink: #fafafa;
+  --admin-muted: #a1a1aa;
+  --admin-line: #3f3f46;
+  --admin-accent: #94a3b8;
+  --admin-accent-contrast: #0f172a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0.01ms;
+  }
+}

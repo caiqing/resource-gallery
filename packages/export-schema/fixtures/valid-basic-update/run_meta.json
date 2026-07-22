@@ -1,0 +1,13 @@
+{
+  "run_id": "run_fixture_001_update",
+  "run_index": 2,
+  "selected_source_count": 1,
+  "artifact_names": [
+    "deck.pdf",
+    "checklist.md"
+  ],
+  "completed_phases": [
+    "parse",
+    "generate"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "resource-gallery.export/v1",
+  "exported_at": "2026-07-19T12:00:00+08:00",
+  "generated_by": {
+    "product": "video2ppt",
+    "product_version": "fixture"
+  },
+  "task_id": "task_fixture_003",
+  "run_id": "run_fixture_003",
+  "run_index": 3,
+  "title": "产品验证路线夹具",
+  "files": [
+    {
+      "path": "files/deck.pdf",
+      "name": "deck.pdf",
+      "kind": "slide_pdf",
+      "sha256": "8a1abadd65ad306632bab92f115e5cdacfb4cff88f2e5919dcf19cf1c568fd15",
+      "size_bytes": 42,
+      "default_include": true
+    },
+    {
+      "path": "files/checklist.md",
+      "name": "checklist.md",
+      "kind": "content",
+      "sha256": "0a703e4e958e28371630f057a8bb1a4d6fea90a96c211522bf75f39b0bdc7572",
+      "size_bytes": 61,
+      "default_include": true
+    },
+    {
+      "path": "files/source.mp4",
+      "name": "source.mp4",
+      "kind": "video",
+      "sha256": "57a6d0fb9cefb2a3861a5370ad45b7845175f627643ef8957b1cb5077061a99c",
+      "size_bytes": 17,
+      "default_include": false
+    }
+  ],
+  "excluded_by_default_kinds": [
+    "video",
+    "subtitle"
+  ]
+}

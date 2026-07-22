@@ -1,0 +1,20 @@
+{$SITE_ADDRESS:localhost} {
+  encode zstd gzip
+
+  header {
+    -Server
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    X-Frame-Options "SAMEORIGIN"
+  }
+
+  @api path /api/* /health /s/*
+  reverse_proxy @api api:8787
+
+  @assets path /assets/*
+  header @assets Cache-Control "public, max-age=31536000, immutable"
+
+  root * /srv
+  try_files {path} /index.html
+  file_server
+}

@@ -1,0 +1,8 @@
+{
+  "task_id": "task_fixture_001",
+  "title": "Agent 评测清单夹具",
+  "source_platform_types": [
+    "web"
+  ],
+  "language": "zh-CN"
+}

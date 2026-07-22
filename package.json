@@ -1,0 +1,20 @@
+{
+  "name": "resource-gallery",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Independent Editorial Gallery for Video2PPT run packages",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "pnpm --parallel --filter @resource-gallery/api --filter @resource-gallery/web dev",
+    "dev:api": "pnpm --filter @resource-gallery/api dev",
+    "dev:web": "pnpm --filter @resource-gallery/web dev",
+    "test": "pnpm -r --if-present run test",
+    "validate:fixtures": "pnpm --filter @resource-gallery/export-schema test",
+    "lint": "pnpm -r --if-present run lint",
+    "smoke": "pnpm --filter @resource-gallery/api test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

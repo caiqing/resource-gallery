@@ -1,0 +1,34 @@
+FROM node:22-bookworm-slim AS build
+
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+COPY . .
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @resource-gallery/api build
+
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=8787 \
+    DATABASE_PATH=./data/gallery.db \
+    BLOB_ROOT=./data/blobs \
+    UPLOAD_ROOT=./data/uploads \
+    SEED_USERS=false
+
+# The workspace dependency is symlinked from the root pnpm installation.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/export-schema ./packages/export-schema
+COPY --from=build /app/services/api/dist ./services/api/dist
+COPY --from=build /app/services/api/package.json ./services/api/package.json
+
+RUN mkdir -p /app/services/api/data/blobs /app/services/api/data/uploads \
+  && chown -R node:node /app
+
+WORKDIR /app/services/api
+USER node
+EXPOSE 8787
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8787/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+CMD ["node", "dist/index.js"]
