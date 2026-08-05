@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://resource-gallery.local/schemas/resource-gallery.export.v2.json",
+  "title": "resource-gallery.export/v2 manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exported_at", "task_id", "run_id", "run_index", "title", "assets"],
+  "properties": {
+    "schema_version": { "const": "resource-gallery.export/v2" },
+    "exported_at": { "type": "string", "minLength": 1 },
+    "generated_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "product": { "type": "string", "minLength": 1 },
+        "product_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "task_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "run_index": { "type": "integer", "minimum": 0 },
+    "title": { "type": "string", "minLength": 1 },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/asset" }
+    },
+    "package_sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "export_scope": { "enum": ["run", "task"] },
+    "source_run_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "name", "kind", "sha256", "size_bytes"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "kind": {
+          "enum": [
+            "slide_pdf", "slide_deck", "infographic", "content", "blueprint", "prompt",
+            "source_context", "video", "subtitle", "auth", "other", "audio_overview",
+            "video_overview", "preview_audio", "preview_video", "poster"
+          ]
+        },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "default_include": { "type": "boolean" },
+        "source_run_id": { "type": "string", "minLength": 1 },
+        "provenance": { "enum": ["pipeline", "generated_overview", "derived_preview"] },
+        "parent_file_id": { "type": ["string", "null"], "minLength": 1 },
+        "variant_group_id": { "type": "string", "minLength": 1 },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mime_type", "duration_ms"],
+          "properties": {
+            "mime_type": { "type": "string", "minLength": 1 },
+            "duration_ms": { "type": "integer", "minimum": 1 },
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 },
+            "audio_codec": { "type": "string", "minLength": 1 },
+            "video_codec": { "type": "string", "minLength": 1 },
+            "language": { "type": "string", "minLength": 1 }
+          }
+        },
+        "distribution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_preview", "entitlement_download"],
+          "properties": {
+            "public_preview": { "enum": ["none", "derived_only"] },
+            "entitlement_download": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # resource-gallery.export/v1 契约
 
+> 媒体升级后的 `resource-gallery.export/v2` 契约、导入边界和验收记录见 [媒体产物导出/导入升级方案](./2026-08-05-media-export-import-upgrade-plan.md)。v1 继续只承载核心文档与图片资源。
+
 实施源。与 [PRD §10](./2026-07-19-resource-gallery-prd.md) 对齐。
 
 ## 原则
@@ -45,3 +47,5 @@ pnpm --filter @resource-gallery/validate-export-package start -- ./packages/expo
 ## JSON Schema
 
 `packages/export-schema/schema/resource-gallery.export.v1.json`
+
+v2 schema：`packages/export-schema/schema/resource-gallery.export.v2.json`

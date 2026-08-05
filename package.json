@@ -12,7 +12,11 @@
     "test": "pnpm -r --if-present run test",
     "validate:fixtures": "pnpm --filter @resource-gallery/export-schema test",
     "lint": "pnpm -r --if-present run lint",
-    "smoke": "pnpm --filter @resource-gallery/api test"
+    "smoke": "pnpm --filter @resource-gallery/api test",
+    "preflight": "node deploy/preflight.mjs --mode production",
+    "preflight:local": "node deploy/preflight.mjs --mode local",
+    "test:preflight": "node --test deploy/preflight.test.mjs deploy/canary-watch.test.mjs",
+    "canary:watch": "node deploy/canary-watch.mjs"
   },
   "engines": {
     "node": ">=20"

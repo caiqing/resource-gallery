@@ -1,0 +1,35 @@
+groups:
+  - name: resource-gallery-sync
+    rules:
+      - alert: ResourceGallerySyncRunFailed
+        expr: delta(resource_gallery_sync_runs_total{status="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Resource Gallery 同步出现新的失败运行
+          runbook: https://gallery.example.com/docs/ops-runbook
+      - alert: ResourceGallerySyncTaskFailed
+        expr: resource_gallery_sync_states_total{status="failed"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Resource Gallery 存在失败的同步任务
+          runbook: https://gallery.example.com/docs/ops-runbook
+      - alert: ResourceGallerySyncReviewStalled
+        expr: resource_gallery_sync_states_total{status="review"} > 0 and resource_gallery_sync_review_oldest_age_seconds > 86400
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Resource Gallery 存在超过 24 小时未审核的同步版本
+          runbook: https://gallery.example.com/docs/ops-runbook
+      - alert: ResourceGallerySyncAutoPublishBlocked
+        expr: resource_gallery_sync_gate_reviews_total > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Resource Gallery 自动发布被安全门禁拦截
+          runbook: https://gallery.example.com/docs/ops-runbook

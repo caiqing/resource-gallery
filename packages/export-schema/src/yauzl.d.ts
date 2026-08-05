@@ -2,6 +2,7 @@ declare module "yauzl" {
   import type { Readable } from "node:stream";
   export interface Entry {
     fileName: string;
+    uncompressedSize: number;
   }
   export interface ZipFile {
     readEntry(): void;
@@ -12,6 +13,7 @@ declare module "yauzl" {
     on(event: "entry", cb: (entry: Entry) => void): void;
     on(event: "end", cb: () => void): void;
     on(event: "error", cb: (err: Error) => void): void;
+    close(): void;
   }
   export function open(
     path: string,

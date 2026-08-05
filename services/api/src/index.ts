@@ -9,7 +9,9 @@ import { authRoutes } from "./routes/auth.js";
 import { downloadRoutes } from "./routes/downloads.js";
 import { meRoutes } from "./routes/me.js";
 import { publicRoutes, sharePageRoutes } from "./routes/public.js";
+import { syncRoutes } from "./routes/sync.js";
 import { seed } from "./seed.js";
+import { backfillMissingListingSummaries } from "./lib/summary-backfill.js";
 
 // init db + seed defaults
 getDb();
@@ -22,7 +24,7 @@ app.use(
   cors({
     origin: config.corsOrigin,
     credentials: true,
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Resource-Gallery-Sync-Run-Id", "X-Resource-Gallery-Task-Id", "X-Resource-Gallery-Publish-Policy", "X-Resource-Gallery-Track-State"],
     exposeHeaders: ["Set-Cookie"]
   })
 );
@@ -33,6 +35,7 @@ app.route("/api/auth", authRoutes);
 app.route("/api", publicRoutes);
 app.route("/api/me", meRoutes);
 app.route("/api/admin", adminRoutes);
+app.route("/api/sync", syncRoutes);
 app.route("/api/downloads", downloadRoutes);
 app.route("/s", sharePageRoutes);
 
@@ -51,4 +54,15 @@ app.onError((err, c) => {
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`API listening on http://127.0.0.1:${info.port}`);
+  void backfillMissingListingSummaries().then(({ scanned, updated }) => {
+    if (scanned > 0) {
+      console.log(JSON.stringify({ event: "listing.summary_backfill", scanned, updated }));
+    }
+  }).catch((error) => {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "listing.summary_backfill_failed",
+      error: error instanceof Error ? error.message : "unknown error"
+    }));
+  });
 });

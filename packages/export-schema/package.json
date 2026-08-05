@@ -10,7 +10,8 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./schema/resource-gallery.export.v1.json": "./schema/resource-gallery.export.v1.json"
+    "./schema/resource-gallery.export.v1.json": "./schema/resource-gallery.export.v1.json",
+    "./schema/resource-gallery.export.v2.json": "./schema/resource-gallery.export.v2.json"
   },
   "files": [
     "dist",

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { config } from "../config.js";
 import { getDb } from "../db/client.js";
+import { TOPIC_DEFINITIONS } from "../lib/topics.js";
 
 export const publicRoutes = new Hono();
 export const sharePageRoutes = new Hono();
@@ -24,8 +25,15 @@ function mapListing(row: any, tags: string[]) {
 }
 
 publicRoutes.get("/topics", (c) => {
-  const rows = getDb().prepare("SELECT id, name, description FROM topics ORDER BY name").all();
-  return c.json({ topics: rows });
+  const rows = getDb().prepare("SELECT id, name, description FROM topics").all() as {
+    id: string;
+    name: string;
+    description: string;
+  }[];
+  const byId = new Map(rows.map((topic) => [topic.id, topic]));
+  return c.json({
+    topics: TOPIC_DEFINITIONS.map((definition) => byId.get(definition.id) ?? definition)
+  });
 });
 
 publicRoutes.get("/listings", (c) => {
@@ -90,13 +98,20 @@ publicRoutes.get("/listings/:id", (c) => {
   const tags = (
     db.prepare(`SELECT tag, topic_id FROM listing_tags WHERE listing_id = ?`).all(row.id) as any[]
   ).map((t) => t.tag);
-  const files = db
-    .prepare(
-      `SELECT id, kind, filename, size_bytes, is_previewable, included
-       FROM listing_files
-       WHERE listing_id = ? AND stripped = 0 AND included = 1`
-    )
-    .all(row.id);
+  const files = row.active_version_id
+    ? db.prepare(
+        `SELECT id, kind, filename, size_bytes,
+                CASE WHEN preview_policy = 'public' THEN 1 ELSE 0 END AS is_previewable,
+                included, duration_ms, mime_type, parent_asset_id
+         FROM listing_assets
+         WHERE version_id = ? AND stripped = 0 AND kind != 'subtitle'
+           AND (included = 1 OR preview_policy = 'public')`
+      ).all(row.active_version_id)
+    : db.prepare(
+        `SELECT id, kind, filename, size_bytes, is_previewable, included
+         FROM listing_files
+         WHERE listing_id = ? AND stripped = 0 AND included = 1`
+      ).all(row.id);
   return c.json({ listing: mapListing(row, tags), files });
 });
 
@@ -128,8 +143,13 @@ publicRoutes.get("/rank", (c) => {
        LIMIT 50`
     )
     .all(...(since ? [since] : []));
+  const tagStmt = getDb().prepare(`SELECT tag FROM listing_tags WHERE listing_id = ?`);
+  const items = (rows as any[]).map((row) => ({
+    ...row,
+    tags: (tagStmt.all(row.id) as { tag: string }[]).map((tag) => tag.tag)
+  }));
   c.header("cache-control", "public, max-age=30, stale-while-revalidate=60");
-  return c.json({ items: rows, metric, period });
+  return c.json({ items, metric, period });
 });
 
 function getShare(slug: string) {

@@ -34,7 +34,20 @@ CREATE TABLE IF NOT EXISTS listings (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '',
+  summary_status TEXT NOT NULL DEFAULT 'ready',
+  summary_origin TEXT NOT NULL DEFAULT 'fallback',
+  summary_source_hash TEXT,
+  summary_model TEXT,
+  summary_generated_at TEXT,
+  summary_locked INTEGER NOT NULL DEFAULT 0,
+  tag_status TEXT NOT NULL DEFAULT 'ready',
+  tag_origin TEXT NOT NULL DEFAULT 'fallback',
+  tag_source_hash TEXT,
+  tag_model TEXT,
+  tag_generated_at TEXT,
+  tag_locked INTEGER NOT NULL DEFAULT 0,
   cover_path TEXT,
+  active_version_id TEXT,
   author_user_id TEXT NOT NULL REFERENCES users(id),
   source_task_id TEXT,
   source_run_id TEXT,
@@ -66,6 +79,54 @@ CREATE TABLE IF NOT EXISTS listing_files (
   included INTEGER NOT NULL DEFAULT 1,
   stripped INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS listing_versions (
+  id TEXT PRIMARY KEY,
+  listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+  schema_version TEXT NOT NULL CHECK (schema_version IN ('resource-gallery.export/v1', 'resource-gallery.export/v2')),
+  package_sha256 TEXT NOT NULL,
+  export_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'active', 'superseded', 'failed')),
+  source_run_id TEXT,
+  source_run_index INTEGER,
+  cover_path TEXT,
+  created_at TEXT NOT NULL,
+  activated_at TEXT,
+  UNIQUE(listing_id, export_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_listing_versions_listing_created
+  ON listing_versions(listing_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS listing_assets (
+  id TEXT PRIMARY KEY,
+  version_id TEXT NOT NULL REFERENCES listing_versions(id) ON DELETE CASCADE,
+  upstream_asset_id TEXT NOT NULL,
+  variant_group_id TEXT,
+  parent_asset_id TEXT REFERENCES listing_assets(id) ON DELETE RESTRICT,
+  kind TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  mime_type TEXT,
+  duration_ms INTEGER,
+  width INTEGER,
+  height INTEGER,
+  audio_codec TEXT,
+  video_codec TEXT,
+  language TEXT,
+  provenance TEXT NOT NULL DEFAULT 'pipeline',
+  preview_policy TEXT NOT NULL DEFAULT 'none' CHECK (preview_policy IN ('none', 'public', 'derived_only')),
+  entitlement_download INTEGER NOT NULL DEFAULT 0,
+  included INTEGER NOT NULL DEFAULT 0,
+  stripped INTEGER NOT NULL DEFAULT 0,
+  source_run_id TEXT,
+  UNIQUE(version_id, upstream_asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_listing_assets_version_included
+  ON listing_assets(version_id, included, stripped);
 
 CREATE TABLE IF NOT EXISTS listing_tags (
   listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
@@ -100,6 +161,41 @@ CREATE TABLE IF NOT EXISTS import_jobs (
   created_at TEXT NOT NULL,
   finished_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS resource_sync_runs (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  publish_policy TEXT NOT NULL CHECK (publish_policy IN ('review', 'auto_publish')),
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+  scanned_count INTEGER NOT NULL DEFAULT 0,
+  changed_count INTEGER NOT NULL DEFAULT 0,
+  unchanged_count INTEGER NOT NULL DEFAULT 0,
+  imported_count INTEGER NOT NULL DEFAULT 0,
+  review_count INTEGER NOT NULL DEFAULT 0,
+  published_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS resource_sync_states (
+  source_task_id TEXT PRIMARY KEY,
+  listing_id TEXT,
+  listing_version_id TEXT,
+  export_fingerprint TEXT,
+  package_sha256 TEXT,
+  publish_policy TEXT NOT NULL CHECK (publish_policy IN ('review', 'auto_publish')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'review', 'published', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error_code TEXT,
+  last_error_message TEXT NOT NULL DEFAULT '',
+  synced_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_sync_states_status
+  ON resource_sync_states(status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS price_tiers (
   id TEXT PRIMARY KEY,

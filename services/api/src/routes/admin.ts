@@ -1,12 +1,63 @@
 import { Hono } from "hono";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
+import { Readable } from "node:stream";
+import { extname, join } from "node:path";
 import { config } from "../config.js";
 import { getDb, id, nowIso, withTransaction } from "../db/client.js";
-import { processImportJob } from "../lib/import.js";
+import { blobStore } from "../lib/blob-store.js";
+import { isPreviewableArtifact, processImportJob } from "../lib/import.js";
+import { backfillMissingListingSummaries } from "../lib/summary-backfill.js";
+import { backfillListingTags } from "../lib/tag-backfill.js";
+import {
+  publicSummaryLlmSettings,
+  summaryLlmOptions,
+  updateSummaryLlmSettings,
+  type PublicSummaryLlmSettings
+} from "../lib/llm-settings.js";
+import { listSummaryLlmModels, testSummaryLlmConnections } from "../lib/summary.js";
+import { MultipartUploadError, streamZipMultipartUpload } from "../lib/stream-upload.js";
 import { requireAdmin } from "../middleware/auth.js";
+import { parseByteRange } from "../lib/http-range.js";
 
 export const adminRoutes = new Hono();
+
+function llmSettingsPayload(settings: PublicSummaryLlmSettings) {
+  return {
+    enabled: settings.enabled,
+    provider: settings.provider,
+    api_base: settings.apiBase,
+    api_key_configured: settings.apiKeyConfigured,
+    api_key: "",
+    model: settings.model,
+    fallback_models: settings.fallbackModels,
+    timeout_ms: settings.timeoutMs,
+    temperature: settings.temperature,
+    max_tokens: settings.maxTokens
+  };
+}
+
+function adminPreviewContentType(filename: string, mimeType?: string | null): string {
+  if (mimeType) return mimeType;
+  const suffix = extname(filename).toLowerCase();
+  return {
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".m4a": "audio/mp4",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm"
+  }[suffix] ?? "application/octet-stream";
+}
+
+function adminPreviewDisposition(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]+/g, "_").replace(/[\\"\r\n]/g, "_") || "preview";
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
 
 adminRoutes.use("*", async (c, next) => {
   try {
@@ -38,6 +89,131 @@ adminRoutes.get("/overview", (c) => {
   });
 });
 
+adminRoutes.get("/llm/settings", (c) => {
+  return c.json({ settings: llmSettingsPayload(publicSummaryLlmSettings()) });
+});
+
+adminRoutes.put("/llm/settings", async (c) => {
+  const admin = requireAdmin(c);
+  const body = await c.req.json().catch(() => ({}));
+  let settings: PublicSummaryLlmSettings;
+  try {
+    settings = updateSummaryLlmSettings({
+      enabled: body.enabled !== false,
+      provider: String(body.provider ?? "openai-compatible"),
+      apiBase: String(body.api_base ?? ""),
+      apiKey: body.api_key == null ? undefined : String(body.api_key),
+      model: String(body.model ?? ""),
+      fallbackModels: Array.isArray(body.fallback_models)
+        ? body.fallback_models.map(String)
+        : [],
+      timeoutMs: Number(body.timeout_ms ?? 20_000),
+      temperature: Number(body.temperature ?? 0.2),
+      maxTokens: Number(body.max_tokens ?? 240)
+    });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "模型配置无效" }, 400);
+  }
+
+  const ts = nowIso();
+  getDb().prepare(
+    `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+     VALUES (?, ?, 'llm.settings.update', 'system_config', 'summary_llm', ?, ?)`
+  ).run(
+    id("aud"),
+    admin.id,
+    JSON.stringify({
+      enabled: settings.enabled,
+      provider: settings.provider,
+      api_base: settings.apiBase,
+      model: settings.model,
+      fallback_models: settings.fallbackModels,
+      timeout_ms: settings.timeoutMs,
+      temperature: settings.temperature,
+      max_tokens: settings.maxTokens,
+      api_key_updated: Boolean(String(body.api_key ?? "").trim())
+    }),
+    ts
+  );
+
+  const backfillScheduled = settings.enabled && settings.apiKeyConfigured;
+  if (backfillScheduled) {
+    void backfillMissingListingSummaries(500).then((result) => {
+      getDb().prepare(
+        `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+         VALUES (?, ?, 'listing.summary_backfill', 'listing_batch', ?, ?, ?)`
+      ).run(
+        id("aud"),
+        admin.id,
+        `batch_${nowIso()}`,
+        JSON.stringify({ ...result, source: "llm_settings_update" }),
+        nowIso()
+      );
+    }).catch((error) => {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "listing.summary_backfill_failed",
+        source: "llm_settings_update",
+        error: error instanceof Error ? error.message : "unknown error"
+      }));
+    });
+    void backfillListingTags(500).then((result) => {
+      getDb().prepare(
+        `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+         VALUES (?, ?, 'listing.tag_backfill', 'listing_batch', ?, ?, ?)`
+      ).run(
+        id("aud"),
+        admin.id,
+        `batch_${nowIso()}`,
+        JSON.stringify({ ...result, source: "llm_settings_update" }),
+        nowIso()
+      );
+    }).catch((error) => {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "listing.tag_backfill_failed",
+        source: "llm_settings_update",
+        error: error instanceof Error ? error.message : "unknown error"
+      }));
+    });
+  }
+
+  return c.json({
+    settings: llmSettingsPayload(settings),
+    backfill_scheduled: backfillScheduled
+  });
+});
+
+adminRoutes.get("/llm/models", async (c) => {
+  try {
+    return c.json({ models: await listSummaryLlmModels(summaryLlmOptions()) });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "模型列表加载失败" }, 502);
+  }
+});
+
+adminRoutes.post("/llm/models", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const options = summaryLlmOptions({
+      apiBase: body.api_base == null ? undefined : String(body.api_base),
+      apiKey: body.api_key == null ? undefined : String(body.api_key),
+      timeoutMs: body.timeout_ms == null ? undefined : Number(body.timeout_ms)
+    });
+    return c.json({ models: await listSummaryLlmModels(options) });
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "模型列表加载失败" }, 502);
+  }
+});
+
+adminRoutes.post("/llm/test", async (c) => {
+  try {
+    return c.json(await testSummaryLlmConnections(summaryLlmOptions()));
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "模型连接测试失败" }, 502);
+  }
+});
+
 adminRoutes.get("/import-jobs", (c) => {
   const rows = getDb()
     .prepare(
@@ -50,24 +226,16 @@ adminRoutes.get("/import-jobs", (c) => {
 
 adminRoutes.post("/import-jobs", async (c) => {
   const admin = requireAdmin(c);
-  const body = await c.req.parseBody();
-  const file = body.file;
-  if (!file || typeof file === "string") {
-    return c.json({ error: "需要上传 zip 文件字段 file" }, 400);
-  }
-  const ab = await file.arrayBuffer();
-  const buf = Buffer.from(ab);
-  if (buf.byteLength > config.maxPackageBytes) {
-    return c.json({ error: "包体积超限" }, 400);
-  }
-  if (!String(file.name || "").toLowerCase().endsWith(".zip")) {
-    return c.json({ error: "仅接受 .zip" }, 400);
-  }
-
   const jobId = id("job");
   const uploadPath = join(config.uploadRoot, `${jobId}.zip`);
   mkdirSync(config.uploadRoot, { recursive: true });
-  writeFileSync(uploadPath, buf);
+  let upload: { filename: string };
+  try {
+    upload = await streamZipMultipartUpload(c.req.raw, uploadPath, config.maxPackageBytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "上传失败";
+    return c.json({ error: message }, error instanceof MultipartUploadError ? error.status : 400);
+  }
 
   getDb()
     .prepare(
@@ -75,7 +243,7 @@ adminRoutes.post("/import-jobs", async (c) => {
         id, admin_user_id, filename, status, message, created_at
       ) VALUES (?, ?, ?, 'pending', '', ?)`
     )
-    .run(jobId, admin.id, file.name || `${jobId}.zip`, nowIso());
+    .run(jobId, admin.id, upload.filename || `${jobId}.zip`, nowIso());
 
   try {
     // Inline execution keeps the MVP deterministic; ImportJob still exposes explicit lifecycle state.
@@ -99,7 +267,8 @@ adminRoutes.post("/import-jobs", async (c) => {
 });
 
 adminRoutes.get("/listings", (c) => {
-  const rows = getDb()
+  const db = getDb();
+  const rows = db
     .prepare(
       `SELECT l.id, l.title, l.status, l.price_tier, l.price_credits, l.source_task_id, l.source_run_id, l.updated_at
        FROM listings l
@@ -107,7 +276,125 @@ adminRoutes.get("/listings", (c) => {
        LIMIT 200`
     )
     .all();
-  return c.json({ listings: rows });
+  const draftCount = db
+    .prepare(`SELECT COUNT(*) AS count FROM listings WHERE status = 'draft'`)
+    .get() as { count: number };
+  return c.json({ listings: rows, draft_count: draftCount.count });
+});
+
+adminRoutes.post("/listings/publish-all", (c) => {
+  const admin = requireAdmin(c);
+  const db = getDb();
+  const drafts = db
+    .prepare(
+      `SELECT l.id, l.title,
+              (SELECT v.id FROM listing_versions v
+               WHERE v.listing_id = l.id AND v.status = 'draft'
+               ORDER BY v.created_at DESC LIMIT 1) AS draft_version_id,
+              (SELECT v.cover_path FROM listing_versions v
+               WHERE v.listing_id = l.id AND v.status = 'draft'
+               ORDER BY v.created_at DESC LIMIT 1) AS draft_cover_path,
+              EXISTS (
+                SELECT 1 FROM listing_files f
+                WHERE f.listing_id = l.id AND f.stripped = 0 AND f.included = 1
+              ) OR EXISTS (
+                SELECT 1 FROM listing_assets a
+                JOIN listing_versions v ON v.id = a.version_id
+                WHERE v.listing_id = l.id AND v.status = 'draft'
+                  AND a.stripped = 0 AND a.included = 1
+              ) AS has_usable_files
+       FROM listings l
+       WHERE l.status = 'draft'
+       ORDER BY l.updated_at DESC`
+    )
+    .all() as { id: string; title: string; draft_version_id: string | null; draft_cover_path: string | null; has_usable_files: number }[];
+
+  const publishable = drafts.filter((listing) => listing.has_usable_files === 1);
+  const skipped = drafts
+    .filter((listing) => listing.has_usable_files !== 1)
+    .map((listing) => ({ id: listing.id, title: listing.title, reason: "no_usable_files" }));
+  const ts = nowIso();
+
+  withTransaction(() => {
+    const publish = db.prepare(
+      `UPDATE listings
+       SET status = 'published', active_version_id = COALESCE(?, active_version_id),
+           cover_path = COALESCE(?, cover_path), published_at = COALESCE(published_at, ?), updated_at = ?
+       WHERE id = ? AND status = 'draft'`
+    );
+    const audit = db.prepare(
+      `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+       VALUES (?, ?, 'listing.publish', 'listing', ?, ?, ?)`
+    );
+
+    for (const listing of publishable) {
+      if (listing.draft_version_id) {
+        db.prepare(`UPDATE listing_versions SET status = 'superseded' WHERE listing_id = ? AND status = 'active'`).run(listing.id);
+        db.prepare(`UPDATE listing_versions SET status = 'active', activated_at = ? WHERE id = ?`).run(ts, listing.draft_version_id);
+      }
+      publish.run(listing.draft_version_id, listing.draft_cover_path, ts, ts, listing.id);
+      audit.run(
+        id("aud"),
+        admin.id,
+        listing.id,
+        JSON.stringify({ from_status: "draft", source: "publish_all", active_version_id: listing.draft_version_id }),
+        ts
+      );
+    }
+
+    db.prepare(
+      `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+       VALUES (?, ?, 'listing.publish_all', 'listing_batch', ?, ?, ?)`
+    ).run(
+      id("aud"),
+      admin.id,
+      `batch_${ts}`,
+      JSON.stringify({ published_count: publishable.length, skipped }),
+      ts
+    );
+  });
+
+  return c.json({
+    ok: true,
+    draft_count: drafts.length,
+    published_count: publishable.length,
+    skipped_count: skipped.length,
+    skipped
+  });
+});
+
+adminRoutes.post("/listings/backfill-summaries", async (c) => {
+  const admin = requireAdmin(c);
+  const body = await c.req.json().catch(() => ({}));
+  const limit = Number.isSafeInteger(Number(body.limit)) ? Number(body.limit) : 100;
+  const result = await backfillMissingListingSummaries(limit, {
+    forceFallback: body.force_fallback === true
+  });
+  const ts = nowIso();
+  getDb().prepare(
+    `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+     VALUES (?, ?, 'listing.summary_backfill', 'listing_batch', ?, ?, ?)`
+  ).run(
+    id("aud"),
+    admin.id,
+    `batch_${ts}`,
+    JSON.stringify({ ...result, force_fallback: body.force_fallback === true }),
+    ts
+  );
+  return c.json({ ok: true, ...result });
+});
+
+adminRoutes.post("/listings/backfill-tags", async (c) => {
+  const admin = requireAdmin(c);
+  const body = await c.req.json().catch(() => ({}));
+  const limit = Number.isSafeInteger(Number(body.limit)) ? Number(body.limit) : 500;
+  const result = await backfillListingTags(limit);
+  const ts = nowIso();
+  getDb().prepare(
+    `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
+     VALUES (?, ?, 'listing.tag_backfill', 'listing_batch', ?, ?, ?)`
+  ).run(id("aud"), admin.id, `batch_${ts}`, JSON.stringify(result), ts);
+  return c.json({ ok: true, ...result });
 });
 
 adminRoutes.get("/listings/:id", (c) => {
@@ -120,7 +407,82 @@ adminRoutes.get("/listings/:id", (c) => {
   const tags = db
     .prepare(`SELECT tag, topic_id FROM listing_tags WHERE listing_id = ?`)
     .all(c.req.param("id"));
-  return c.json({ listing, files, tags });
+  const versions = db
+    .prepare(`SELECT * FROM listing_versions WHERE listing_id = ? ORDER BY created_at DESC`)
+    .all(c.req.param("id"));
+  const assets = db
+    .prepare(
+      `SELECT a.* FROM listing_assets a
+       JOIN listing_versions v ON v.id = a.version_id
+       WHERE v.listing_id = ? ORDER BY v.created_at DESC, a.filename`
+    )
+    .all(c.req.param("id"));
+  return c.json({ listing, files, tags, versions, assets });
+});
+
+adminRoutes.get("/listings/:id/preview", async (c) => {
+  const listingId = c.req.param("id");
+  const filename = c.req.query("file") ?? "";
+  if (!filename) return c.json({ error: "file required" }, 400);
+  const db = getDb();
+  const listing = db.prepare(`SELECT id, active_version_id FROM listings WHERE id = ?`).get(listingId) as
+    | { id: string; active_version_id: string | null }
+    | undefined;
+  if (!listing) return c.json({ error: "not found" }, 404);
+
+  const requestedVersion = c.req.query("version_id") ?? "";
+  const draftVersion = db.prepare(
+    `SELECT id FROM listing_versions WHERE listing_id = ? AND status = 'draft' ORDER BY created_at DESC LIMIT 1`
+  ).get(listingId) as { id: string } | undefined;
+  const versionId = requestedVersion || draftVersion?.id || listing.active_version_id || "";
+  const asset = versionId
+    ? db.prepare(
+        `SELECT a.filename, a.storage_path, a.mime_type
+         FROM listing_assets a JOIN listing_versions v ON v.id = a.version_id
+         WHERE v.listing_id = ? AND a.version_id = ? AND a.filename = ? AND a.stripped = 0`
+      ).get(listingId, versionId, filename) as { filename: string; storage_path: string; mime_type: string | null } | undefined
+    : db.prepare(
+        `SELECT filename, storage_path, NULL AS mime_type FROM listing_files
+         WHERE listing_id = ? AND filename = ? AND stripped = 0`
+      ).get(listingId, filename) as { filename: string; storage_path: string; mime_type: string | null } | undefined;
+  if (!asset) return c.json({ error: "preview unavailable" }, 404);
+
+  let source;
+  try {
+    source = await blobStore.open(listingId, asset.storage_path);
+  } catch {
+    return c.json({ error: "blob missing" }, 404);
+  }
+  const headers = {
+    "content-type": adminPreviewContentType(asset.filename, asset.mime_type),
+    "accept-ranges": "bytes",
+    "content-disposition": adminPreviewDisposition(asset.filename),
+    "cache-control": "no-store"
+  };
+  const range = c.req.header("range");
+  if (!range) {
+    return new Response(Readable.toWeb(source.stream) as any, {
+      headers: { ...headers, "content-length": String(source.size) }
+    });
+  }
+  const parsedRange = parseByteRange(range, source.size);
+  if (!parsedRange) {
+    return new Response(null, { status: 416, headers: { "content-range": `bytes */${source.size}` } });
+  }
+  const { start, end } = parsedRange;
+  try {
+    const ranged = await blobStore.open(listingId, asset.storage_path, { start, end });
+    return new Response(Readable.toWeb(ranged.stream) as any, {
+      status: 206,
+      headers: {
+        ...headers,
+        "content-length": String(end - start + 1),
+        "content-range": `bytes ${start}-${end}/${source.size}`
+      }
+    });
+  } catch {
+    return c.json({ error: "blob missing" }, 404);
+  }
 });
 
 adminRoutes.patch("/listings/:id", async (c) => {
@@ -133,6 +495,8 @@ adminRoutes.patch("/listings/:id", async (c) => {
 
   const title = body.title != null ? String(body.title).trim() : listing.title;
   const summary = body.summary != null ? String(body.summary).trim() : listing.summary;
+  const summaryChanged = body.summary != null && summary !== listing.summary;
+  const tagsChanged = Array.isArray(body.tags);
   if (!title || title.length > 120 || summary.length > 1000) {
     return c.json({ error: "标题或摘要长度无效" }, 400);
   }
@@ -165,20 +529,77 @@ adminRoutes.patch("/listings/:id", async (c) => {
   withTransaction(() => {
     db.prepare(
       `UPDATE listings
-       SET title = ?, summary = ?, price_tier = ?, price_credits = ?, status = ?, published_at = ?, updated_at = ?
+       SET title = ?, summary = ?,
+           summary_status = CASE WHEN ? THEN 'ready' ELSE summary_status END,
+           summary_origin = CASE WHEN ? THEN 'operator' ELSE summary_origin END,
+           summary_locked = CASE WHEN ? THEN 1 ELSE summary_locked END,
+           tag_origin = CASE WHEN ? THEN 'operator' ELSE tag_origin END,
+           tag_locked = CASE WHEN ? THEN 1 ELSE tag_locked END,
+           price_tier = ?, price_credits = ?, status = ?, published_at = ?, updated_at = ?
        WHERE id = ?`
-    ).run(title, summary, priceTier, priceCredits, status, publishedAt, ts, listingId);
+    ).run(
+      title,
+      summary,
+      summaryChanged ? 1 : 0,
+      summaryChanged ? 1 : 0,
+      summaryChanged ? 1 : 0,
+      tagsChanged ? 1 : 0,
+      tagsChanged ? 1 : 0,
+      priceTier,
+      priceCredits,
+      status,
+      publishedAt,
+      ts,
+      listingId
+    );
 
     if (Array.isArray(body.included_file_ids)) {
       const ids = new Set(body.included_file_ids.map(String));
       const files = db
-        .prepare(`SELECT id, stripped FROM listing_files WHERE listing_id = ?`)
-        .all(listingId) as { id: string; stripped: number }[];
+        .prepare(`SELECT id, kind, filename, is_previewable, stripped FROM listing_files WHERE listing_id = ?`)
+        .all(listingId) as { id: string; kind: string; filename: string; is_previewable: number; stripped: number }[];
       for (const file of files) {
+        const included = !file.stripped && ids.has(file.id) ? 1 : 0;
+        const publicPreview = included && (file.is_previewable === 1 || /\.(md|markdown|mdx|txt)$/i.test(file.filename)) ? "public" : "none";
         db.prepare(`UPDATE listing_files SET included = ? WHERE id = ?`).run(
-          !file.stripped && ids.has(file.id) ? 1 : 0,
+          included,
           file.id
         );
+        db.prepare(
+          `UPDATE listing_assets SET included = ?, preview_policy = ?
+           WHERE id = ? AND stripped = 0`
+        ).run(included, publicPreview, file.id);
+      }
+    }
+
+    if (Array.isArray(body.included_asset_ids)) {
+      const versionId = body.version_id != null
+        ? String(body.version_id)
+        : (db.prepare(
+            `SELECT id FROM listing_versions WHERE listing_id = ? AND status = 'draft' ORDER BY created_at DESC LIMIT 1`
+          ).get(listingId) as { id: string } | undefined)?.id;
+      if (!versionId) throw new Error("没有可编辑的草稿版本");
+      const version = db.prepare(`SELECT id FROM listing_versions WHERE id = ? AND listing_id = ? AND status = 'draft'`)
+        .get(versionId, listingId) as { id: string } | undefined;
+      if (!version) throw new Error("只能编辑当前 Listing 的草稿版本");
+      const ids = new Set(body.included_asset_ids.map(String));
+      const assets = db.prepare(`SELECT id, kind, filename, stripped FROM listing_assets WHERE version_id = ?`).all(versionId) as { id: string; kind: string; filename: string; stripped: number }[];
+      for (const asset of assets) {
+        const isPreviewDerivative = ["poster", "preview_audio", "preview_video"].includes(asset.kind);
+        const isFullMedia = ["audio_overview", "video_overview"].includes(asset.kind);
+        const included = !asset.stripped && !isPreviewDerivative && ids.has(asset.id) ? 1 : 0;
+        const previewPolicy = isPreviewDerivative
+          ? "public"
+          : isFullMedia
+            ? "derived_only"
+            : included && asset.kind !== "subtitle" && isPreviewableArtifact(asset.kind, asset.filename)
+              ? "public"
+              : "none";
+        db.prepare(`UPDATE listing_assets SET included = ? WHERE id = ?`).run(
+          included,
+          asset.id
+        );
+        db.prepare(`UPDATE listing_assets SET preview_policy = ? WHERE id = ?`).run(previewPolicy, asset.id);
       }
     }
 
@@ -221,21 +642,33 @@ adminRoutes.post("/listings/:id/publish", async (c) => {
   if (!["draft", "unlisted", "published"].includes(listing.status)) {
     return c.json({ error: `invalid transition ${listing.status} -> published` }, 409);
   }
-  const usable = db
-    .prepare(
-      `SELECT COUNT(*) AS c FROM listing_files WHERE listing_id = ? AND stripped = 0 AND included = 1`
-    )
-    .get(listingId) as { c: number };
+  const draftVersion = db
+    .prepare(`SELECT id FROM listing_versions WHERE listing_id = ? AND status = 'draft' ORDER BY created_at DESC LIMIT 1`)
+    .get(listingId) as { id: string } | undefined;
+  const usable = draftVersion
+    ? (db.prepare(`SELECT COUNT(*) AS c FROM listing_assets WHERE version_id = ? AND stripped = 0 AND included = 1`)
+        .get(draftVersion.id) as { c: number })
+    : (db.prepare(`SELECT COUNT(*) AS c FROM listing_files WHERE listing_id = ? AND stripped = 0 AND included = 1`)
+        .get(listingId) as { c: number });
   if (usable.c === 0) return c.json({ error: "无可用文件，无法发布" }, 400);
   const ts = nowIso();
   withTransaction(() => {
+    if (draftVersion) {
+      db.prepare(`UPDATE listing_versions SET status = 'superseded' WHERE listing_id = ? AND status = 'active'`).run(listingId);
+      db.prepare(`UPDATE listing_versions SET status = 'active', activated_at = ? WHERE id = ?`).run(ts, draftVersion.id);
+    }
+    const draftCover = draftVersion
+      ? (db.prepare(`SELECT cover_path FROM listing_versions WHERE id = ?`).get(draftVersion.id) as { cover_path: string | null } | undefined)?.cover_path ?? null
+      : null;
     db.prepare(
-      `UPDATE listings SET status = 'published', published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ?`
-    ).run(ts, ts, listingId);
+      `UPDATE listings SET status = 'published', active_version_id = COALESCE(?, active_version_id),
+       cover_path = COALESCE(?, cover_path),
+       published_at = COALESCE(published_at, ?), updated_at = ? WHERE id = ?`
+    ).run(draftVersion?.id ?? null, draftCover, ts, ts, listingId);
     db.prepare(
       `INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail, created_at)
        VALUES (?, ?, 'listing.publish', 'listing', ?, ?, ?)`
-    ).run(id("aud"), admin.id, listingId, JSON.stringify({ from_status: listing.status }), ts);
+    ).run(id("aud"), admin.id, listingId, JSON.stringify({ from_status: listing.status, active_version_id: draftVersion?.id ?? null }), ts);
   });
   return c.json({ ok: true });
 });

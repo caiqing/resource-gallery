@@ -27,6 +27,25 @@ export type Listing = {
   tags: string[];
 };
 
+export type SummaryLlmSettings = {
+  enabled: boolean;
+  provider: string;
+  api_base: string;
+  api_key_configured: boolean;
+  api_key: "";
+  model: string;
+  fallback_models: string[];
+  timeout_ms: number;
+  temperature: number;
+  max_tokens: number;
+};
+
+export type SummaryLlmModel = {
+  id: string;
+  name: string;
+  ownedBy: string;
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
@@ -92,10 +111,16 @@ export const api = {
     }),
   checkout: (id: string) =>
     request<any>(`/api/me/listings/${id}/checkout`, { method: "POST" }),
-  downloadToken: (id: string) =>
-    request<{ token: string; url: string }>(`/api/me/listings/${id}/download-token`, {
+  downloadToken: (id: string, file?: string) => {
+    const qs = file ? `?file=${encodeURIComponent(file)}` : "";
+    return request<{ token: string; url: string }>(`/api/me/listings/${id}/download-token${qs}`, {
       method: "POST"
-    }),
+    });
+  },
+  previewUrl: (id: string, file: string) =>
+    `/api/downloads/${id}/preview?file=${encodeURIComponent(file)}`,
+  adminPreviewUrl: (id: string, file: string, versionId?: string) =>
+    `/api/admin/listings/${id}/preview?file=${encodeURIComponent(file)}${versionId ? `&version_id=${encodeURIComponent(versionId)}` : ""}`,
   share: (id: string) =>
     request<{ slug: string; path: string; public_path: string }>(`/api/me/listings/${id}/share`, { method: "POST" }),
   shareGet: (slug: string) => request<{ share: any }>(`/api/share/${slug}`),
@@ -105,13 +130,40 @@ export const api = {
       body: JSON.stringify({ reason, detail })
     }),
   adminOverview: () => request<any>("/api/admin/overview"),
+  adminLlmSettings: () =>
+    request<{ settings: SummaryLlmSettings }>("/api/admin/llm/settings"),
+  adminUpdateLlmSettings: (body: Omit<SummaryLlmSettings, "api_key_configured" | "api_key"> & { api_key?: string }) =>
+    request<{ settings: SummaryLlmSettings; backfill_scheduled: boolean }>("/api/admin/llm/settings", {
+      method: "PUT",
+      body: JSON.stringify(body)
+    }),
+  adminLlmModels: (connection?: { api_base?: string; api_key?: string; timeout_ms?: number }) =>
+    request<{ models: SummaryLlmModel[] }>("/api/admin/llm/models", connection ? {
+      method: "POST",
+      body: JSON.stringify(connection)
+    } : {}),
+  adminTestLlm: () =>
+    request<{ ok: boolean; results: Array<{ ok: boolean; model: string; message: string }> }>("/api/admin/llm/test", {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  adminBackfillSummaries: () =>
+    request<{ ok: true; scanned: number; updated: number }>("/api/admin/listings/backfill-summaries", {
+      method: "POST",
+      body: JSON.stringify({ limit: 500 })
+    }),
+  adminBackfillTags: () =>
+    request<{ ok: true; scanned: number; updated: number }>("/api/admin/listings/backfill-tags", {
+      method: "POST",
+      body: JSON.stringify({ limit: 500 })
+    }),
   adminJobs: () => request<{ jobs: any[] }>("/api/admin/import-jobs"),
   adminImport: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
     return request<{ job: any }>("/api/admin/import-jobs", { method: "POST", body: fd });
   },
-  adminListings: () => request<{ listings: any[] }>("/api/admin/listings"),
+  adminListings: () => request<{ listings: any[]; draft_count: number }>("/api/admin/listings"),
   adminListing: (id: string) => request<any>(`/api/admin/listings/${id}`),
   adminPatchListing: (id: string, body: any) =>
     request<any>(`/api/admin/listings/${id}`, {
@@ -120,6 +172,14 @@ export const api = {
     }),
   adminPublish: (id: string) =>
     request<any>(`/api/admin/listings/${id}/publish`, { method: "POST" }),
+  adminPublishAll: () =>
+    request<{
+      ok: boolean;
+      draft_count: number;
+      published_count: number;
+      skipped_count: number;
+      skipped: Array<{ id: string; title: string; reason: string }>;
+    }>("/api/admin/listings/publish-all", { method: "POST" }),
   adminGrant: (email: string, amount: number, note?: string) =>
     request<any>("/api/admin/credits/grant", {
       method: "POST",

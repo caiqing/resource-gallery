@@ -9,12 +9,16 @@
 	}
 
 	@api path /api/* /health /s/*
-	reverse_proxy @api api:8787
+	handle @api {
+		reverse_proxy api:8787
+	}
 
-	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
+	handle {
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
 
-	root * /srv
-	try_files {path} /index.html
-	file_server
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
 }

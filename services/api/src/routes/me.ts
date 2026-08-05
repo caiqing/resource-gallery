@@ -249,17 +249,18 @@ meRoutes.post("/listings/:id/download-token", (c) => {
   const listingId = c.req.param("id");
   const db = getDb();
   const listing = db
-    .prepare(`SELECT id, status, price_credits, author_user_id FROM listings WHERE id = ?`)
+    .prepare(`SELECT id, status, price_credits, author_user_id, active_version_id FROM listings WHERE id = ?`)
     .get(listingId) as any;
   if (!listing) return c.json({ error: "not found" }, 404);
 
   const ent = db
     .prepare(`SELECT id FROM download_entitlements WHERE user_id = ? AND listing_id = ?`)
     .get(user.id, listingId);
+  const adminAccess = user.role === "admin";
   const free =
     listing.status === "published" &&
     (listing.price_credits === 0 || listing.author_user_id === user.id);
-  if (!ent && !free) return c.json({ error: "no entitlement" }, 403);
+  if (!ent && !free && !adminAccess) return c.json({ error: "no entitlement" }, 403);
 
   if (!ent && free) {
     withTransaction(() => {
@@ -281,10 +282,33 @@ meRoutes.post("/listings/:id/download-token", (c) => {
   }
 
   const token = makeDownloadToken(listingId, user.id);
+  const requestedFile = String(c.req.query("file") || "").trim();
+  if (requestedFile) {
+    const file = listing.active_version_id
+      ? db
+          .prepare(
+            `SELECT filename FROM listing_assets
+             WHERE version_id = ?
+               AND stripped = 0
+               AND included = 1
+               AND kind NOT IN ('poster', 'preview_audio', 'preview_video')
+               AND filename = ?`
+          )
+          .get(listing.active_version_id, requestedFile) as { filename: string } | undefined
+      : db
+          .prepare(
+            `SELECT filename FROM listing_files
+             WHERE listing_id = ? AND stripped = 0 AND included = 1 AND filename = ?`
+          )
+          .get(listingId, requestedFile) as { filename: string } | undefined;
+    if (!file) return c.json({ error: "file not found" }, 404);
+  }
+  const qs = new URLSearchParams({ token });
+  if (requestedFile) qs.set("file", requestedFile);
   return c.json({
     token,
     expires_in_sec: 300,
-    url: `/api/downloads/${listingId}?token=${token}`
+    url: `/api/downloads/${listingId}?${qs.toString()}`
   });
 });
 

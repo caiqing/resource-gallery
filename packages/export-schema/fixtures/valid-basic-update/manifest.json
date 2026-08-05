@@ -28,7 +28,6 @@
     }
   ],
   "excluded_by_default_kinds": [
-    "video",
-    "subtitle"
+    "auth"
   ]
 }

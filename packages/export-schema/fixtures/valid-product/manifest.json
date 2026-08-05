@@ -32,11 +32,10 @@
       "kind": "video",
       "sha256": "57a6d0fb9cefb2a3861a5370ad45b7845175f627643ef8957b1cb5077061a99c",
       "size_bytes": 17,
-      "default_include": false
+      "default_include": true
     }
   ],
   "excluded_by_default_kinds": [
-    "video",
-    "subtitle"
+    "auth"
   ]
 }

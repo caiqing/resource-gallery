@@ -1,17 +1,7 @@
 import { getDb, id, nowIso } from "./db/client.js";
 import { hashPassword } from "./lib/crypto.js";
 import { config } from "./config.js";
-
-const TOPICS = [
-  ["ai-eng", "AI 工程", "模型、评测与落地系统"],
-  ["pm", "产品管理", "路径、取舍与验证"],
-  ["biz", "商业模式", "增长与交易结构"],
-  ["edu", "教育培训", "课程与陪练资产"],
-  ["industry", "行业观察", "趋势与案例拆解"],
-  ["growth", "个人成长", "方法与复盘"],
-  ["design", "设计创意", "系统与表达"],
-  ["other", "其他", "尚未归类的精选"]
-] as const;
+import { TOPIC_DEFINITIONS } from "./lib/topics.js";
 
 function upsertUser(email: string, password: string, displayName: string, role: "user" | "admin") {
   const db = getDb();
@@ -40,10 +30,11 @@ function upsertUser(email: string, password: string, displayName: string, role: 
 
 export function seed() {
   const db = getDb();
-  for (const [id_, name, desc] of TOPICS) {
+  for (const topic of TOPIC_DEFINITIONS) {
     db.prepare(
-      `INSERT OR IGNORE INTO topics (id, name, description) VALUES (?, ?, ?)`
-    ).run(id_, name, desc);
+      `INSERT INTO topics (id, name, description) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description`
+    ).run(topic.id, topic.name, topic.description);
   }
 
   for (const tier of [
